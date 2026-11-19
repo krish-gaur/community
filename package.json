@@ -1,4 +1,3 @@
-
 {
   "name": "aiglorythm-platform",
   "version": "1.0.0",
@@ -10,12 +9,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:migrate:turso": "node scripts/migrate-to-turso.mjs"
   },
   "dependencies": {
     "bcryptjs": "2.4.3",
-    "better-sqlite3": "12.10.1",
     "jose": "5.9.6",
+    "libsql": "0.5.29",
     "lucide-react": "0.468.0",
     "next": "15.5.7",
     "react": "18.3.1",
@@ -24,7 +24,6 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "22.10.2",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",

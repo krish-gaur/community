@@ -1,9 +1,72 @@
-import Database from 'better-sqlite3';
+import Database from 'libsql';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 
-const dbPath = path.join(process.cwd(), 'data', 'aiglorythm.db');
+const DB_FILENAME = 'aiglorythm.db';
+
+type DatabaseConfig = {
+  filename: string;
+  options: Database.Options & { authToken?: string };
+  isRemote: boolean;
+};
+
+function isRemoteDatabaseUrl(value: string) {
+  return /^(libsql|https?|wss?):\/\//i.test(value);
+}
+
+function resolveLocalDatabasePath() {
+  const configured = process.env.DATABASE_PATH?.trim();
+  if (configured) {
+    return path.isAbsolute(configured) ? configured : path.resolve(process.cwd(), configured);
+  }
+
+  // Local development keeps its data in the repository. Support both the
+  // current app/data location and the legacy root data directory.
+  const candidates = [
+    path.join(process.cwd(), 'app', 'data', DB_FILENAME),
+    path.join(process.cwd(), 'data', DB_FILENAME),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
+
+function resolveDatabaseConfig(): DatabaseConfig {
+  const configuredUrl = (process.env.TURSO_DATABASE_URL || process.env.LIBSQL_DATABASE_URL || '').trim();
+
+  if (configuredUrl && isRemoteDatabaseUrl(configuredUrl)) {
+    return {
+      filename: configuredUrl,
+      options: {
+        authToken: (process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN || '').trim() || undefined,
+      },
+      isRemote: true,
+    };
+  }
+
+  // A production Vercel deployment has a read-only bundle and an ephemeral
+  // /tmp. Refuse to start on any local file there instead of surfacing a
+  // later ENOENT/EROFS error or silently losing writes.
+  if (
+    process.env.VERCEL &&
+    process.env.NODE_ENV === 'production' &&
+    process.env.NEXT_PHASE !== 'phase-production-build'
+  ) {
+    throw new Error(
+      'No persistent database is configured for this Vercel deployment. ' +
+        'Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN (libSQL/Turso). ' +
+        'The Vercel bundle is read-only and /tmp is ephemeral, so DATABASE_PATH and local ' +
+        'SQLite files cannot safely store production data. Use DATABASE_PATH only on a ' +
+        'self-hosted Node service with a persistent mounted volume.',
+    );
+  }
+
+  return {
+    filename: resolveLocalDatabasePath(),
+    options: {},
+    isRemote: false,
+  };
+}
+
 let database: Database.Database | undefined;
 
 export type SiteSetting = { key: string; value: string; updated_at: string };
@@ -11,10 +74,25 @@ export type Section = { id:number; page_key:string; section_key:string; title:st
 
 export function db() {
   if (!database) {
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    database = new Database(dbPath);
-    database.pragma('foreign_keys = ON');
-    database.pragma('journal_mode = WAL');
+    const config = resolveDatabaseConfig();
+
+    if (!config.isRemote) {
+      fs.mkdirSync(path.dirname(config.filename), { recursive: true });
+    }
+
+    database = new Database(config.filename, config.options);
+    if (config.isRemote) {
+      // Turso/libSQL enforces constraints server-side. PRAGMA settings such as
+      // journal_mode are only meaningful for a local file connection.
+      try {
+        database.pragma('foreign_keys = ON');
+      } catch {
+        // Older libSQL servers may not expose connection pragmas over HTTP.
+      }
+    } else {
+      database.pragma('foreign_keys = ON');
+      database.pragma('journal_mode = WAL');
+    }
     migrate(database);
     seed(database);
   }
@@ -97,8 +175,12 @@ function seed(d: Database.Database) {
   if (!count.n) {
     const email = process.env.ADMIN_EMAIL || 'admin@aiglorythm.org';
     const password = process.env.ADMIN_PASSWORD || 'AlGloryThM@2026!';
-    const result = d.prepare('INSERT INTO users(email,password_hash,role,email_verified) VALUES (?,?,?,1)').run(email, bcrypt.hashSync(password, 12), 'super_admin');
-    d.prepare('INSERT INTO profiles(user_id,full_name,bio) VALUES (?,?,?)').run(result.lastInsertRowid, 'AlGloryThM Administrator', 'Initial platform administrator');
+    // OR IGNORE makes concurrent cold starts on a fresh database safe: one
+    // instance creates the bootstrap administrator, the others keep it.
+    const result = d.prepare('INSERT OR IGNORE INTO users(email,password_hash,role,email_verified) VALUES (?,?,?,1)').run(email, bcrypt.hashSync(password, 12), 'super_admin');
+    if (result.changes > 0) {
+      d.prepare('INSERT INTO profiles(user_id,full_name,bio) VALUES (?,?,?)').run(result.lastInsertRowid, 'AlGloryThM Administrator', 'Initial platform administrator');
+    }
   }
   const settings: Record<string,string> = {
     brand_name:'AlGloryThM', tagline:'Where Curiosity Becomes Capability.', logo_url:'/images/aiglorythm-logo.jpeg', favicon_url:'/images/aiglorythm-logo.jpeg',
@@ -123,13 +205,13 @@ function seed(d: Database.Database) {
   const oppCount = d.prepare('SELECT count(*) n FROM opportunities').get() as {n:number};
   if(!oppCount.n){
     const creator = (d.prepare('SELECT id FROM users LIMIT 1').get() as {id:number}).id;
-    d.prepare('INSERT INTO opportunities(title,slug,organization,category,summary,description,eligibility,location,deadline,application_url,status,featured,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run('Open-source starter sprint','open-source-starter-sprint','AlGloryThM','Open-source','A guided starting point for meaningful first contributions.','A structured community sprint where participants choose a project, learn contribution workflows, and prepare a first pull request. Details are editable from the admin panel.','Open to college students with basic Git familiarity.','Remote','2027-01-15','','published',1,creator);
-    d.prepare('INSERT INTO opportunities(title,slug,organization,category,summary,description,eligibility,location,deadline,application_url,status,featured,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run('Research problem circle','research-problem-circle','AlGloryThM','Research programs','Collaborative exploration of practical AI research questions.','An interest-based research circle with reading sessions, peer feedback, and lightweight project proposals. Details will be announced by the organizing team.','Open to active community applicants.','Delhi / Online','2027-02-01','','published',0,creator);
+    d.prepare('INSERT OR IGNORE INTO opportunities(title,slug,organization,category,summary,description,eligibility,location,deadline,application_url,status,featured,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run('Open-source starter sprint','open-source-starter-sprint','AlGloryThM','Open-source','A guided starting point for meaningful first contributions.','A structured community sprint where participants choose a project, learn contribution workflows, and prepare a first pull request. Details are editable from the admin panel.','Open to college students with basic Git familiarity.','Remote','2027-01-15','','published',1,creator);
+    d.prepare('INSERT OR IGNORE INTO opportunities(title,slug,organization,category,summary,description,eligibility,location,deadline,application_url,status,featured,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run('Research problem circle','research-problem-circle','AlGloryThM','Research programs','Collaborative exploration of practical AI research questions.','An interest-based research circle with reading sessions, peer feedback, and lightweight project proposals. Details will be announced by the organizing team.','Open to active community applicants.','Delhi / Online','2027-02-01','','published',0,creator);
   }
   const eventCount = d.prepare('SELECT count(*) n FROM events').get() as {n:number};
   if(!eventCount.n){
     const creator=(d.prepare('SELECT id FROM users LIMIT 1').get() as {id:number}).id;
-    d.prepare('INSERT INTO events(title,slug,summary,description,start_at,end_at,venue,is_online,registration_deadline,eligibility,schedule_json,speakers_json,status,featured,capacity,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('Build systems that last','build-systems-that-last','A practical conversation on thoughtful software craftsmanship.','A community session on systems thinking, reliable delivery, and how students can develop professional technical habits. Event details are managed from the central admin panel.','2027-01-25T11:00','2027-01-25T13:00','Online',1,'2027-01-23T23:59','Open to college students','[{"time":"11:00","title":"Welcome and context"},{"time":"11:20","title":"Session"},{"time":"12:25","title":"Questions and networking"}]','[]','published',1,200,creator);
+    d.prepare('INSERT OR IGNORE INTO events(title,slug,summary,description,start_at,end_at,venue,is_online,registration_deadline,eligibility,schedule_json,speakers_json,status,featured,capacity,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('Build systems that last','build-systems-that-last','A practical conversation on thoughtful software craftsmanship.','A community session on systems thinking, reliable delivery, and how students can develop professional technical habits. Event details are managed from the central admin panel.','2027-01-25T11:00','2027-01-25T13:00','Online',1,'2027-01-23T23:59','Open to college students','[{"time":"11:00","title":"Welcome and context"},{"time":"11:20","title":"Session"},{"time":"12:25","title":"Questions and networking"}]','[]','published',1,200,creator);
   }
 }
 

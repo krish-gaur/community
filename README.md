@@ -51,12 +51,14 @@ The schema records a revision snapshot (`content_versions`) for each CMS update.
 
 - **Next.js 15**, React 18, TypeScript
 - Custom responsive design system (no remote runtime UI dependency)
-- `better-sqlite3` relational database with foreign keys, WAL mode, indexes, unique constraints, and idempotent migrations
+- libSQL (SQLite-compatible) through the `libsql` driver, with foreign keys, WAL mode for local files, indexes, unique constraints, and idempotent migrations
 - `bcryptjs`, `jose`, `zod`, `lucide-react`
 
 ### Database design
 
-Schema bootstrap and idempotent migrations are in `app/lib/db.ts`; the database file is `data/aiglorythm.db` and is deliberately ignored by Git. Tables include:
+Schema bootstrap and idempotent migrations are in `app/lib/db.ts`. In local development the database file is `app/data/aiglorythm.db` (the legacy `data/aiglorythm.db` location is also detected). Set `DATABASE_PATH` to use a different local file. In production the same schema runs on a persistent libSQL/Turso database configured with `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`.
+
+Do not use the local SQLite file as production storage on Vercel: the deployment bundle is read-only and `/tmp` is ephemeral. The application refuses to start on Vercel without a persistent database instead of silently losing writes. Tables include:
 
 `users`, `profiles`, `membership_applications`, `events`, `event_registrations`, `opportunities`, `bookmarks`, `team_members`, `partners`, `testimonials`, `announcements`, `media`, `inquiries`, `site_settings`, `page_sections`, `content_versions`, `notifications`, `password_reset_tokens`, and `email_verification_tokens`.
 
@@ -72,7 +74,7 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-On its first boot the app creates the database and the initial Super Admin.
+On its first boot the app creates the local database and the initial Super Admin. No external database is required for local development.
 
 | Field | Default development value |
 |---|---|
@@ -90,6 +92,9 @@ JWT_SECRET=replace-with-a-long-random-secret-at-least-32-characters
 ADMIN_EMAIL=admin@aiglorythm.org
 ADMIN_PASSWORD=Change-this-immediately-2026!
 NEXT_PUBLIC_SITE_URL=https://your-domain.example
+# TURSO_DATABASE_URL=libsql://your-database.turso.io
+# TURSO_AUTH_TOKEN=
+# DATABASE_PATH=
 RESEND_API_KEY=
 EMAIL_FROM=AlGloryThM <hello@your-domain.example>
 ```
@@ -99,6 +104,8 @@ EMAIL_FROM=AlGloryThM <hello@your-domain.example>
 | `JWT_SECRET` | Yes in production | Session signing key; use a long random value. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | First run | Seeds initial Super Admin only when no user exists. |
 | `NEXT_PUBLIC_SITE_URL` | Production | Canonical URLs and reset/verification links. |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Yes on Vercel | Persistent libSQL/Turso database. `LIBSQL_DATABASE_URL` / `LIBSQL_AUTH_TOKEN` are accepted as aliases. |
+| `DATABASE_PATH` | Optional | Local development file override, or an absolute path on a persistent mounted volume for self-hosted Node. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Optional | Email delivery for verification/reset and admin notifications. In-app notifications continue without them. |
 
 ## Content workflow
@@ -113,23 +120,51 @@ All ordinary content changes are persisted immediately; no source edit or rebuil
 
 ## Production deployment
 
-This implementation uses a robust SQLite file for a fully functional zero-credential build. For production deploy it to a Node host with a **persistent writable volume**, such as Render, Railway, Fly.io, or a VPS:
+### Vercel (recommended for this repository)
 
-1. Create a Node 20 service from this repository.
-2. Attach a persistent disk/volume mounted at the app’s `data/` directory.
-3. Set the environment variables above; use an HTTPS domain for `NEXT_PUBLIC_SITE_URL`.
+Vercel does not provide persistent filesystem storage. The function bundle is read-only and `/tmp` is lost when an instance is recycled, so production data must live in a managed database. This application uses libSQL/Turso, which keeps the SQLite schema and queries unchanged.
+
+1. Create a libSQL database with [Turso](https://turso.tech) (the free tier is sufficient to start).
+2. Add `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to the Vercel project's environment variables for Production, Preview, and Development.
+3. Add the remaining variables from `.env.example`, including a long random `JWT_SECRET` and a non-default `ADMIN_PASSWORD`.
+4. Deploy. The first request creates the schema and seeds the initial administrator in the Turso database.
+5. If you already have records in the local database, migrate them before the first production use (below).
+
+The build works without database variables by using the repository's local database for build-time metadata. The production runtime requires a persistent database and reports a clear configuration error if one is missing.
+
+### Self-hosted Node with a persistent volume
+
+1. Create a Node 20+ service from this repository.
+2. Attach a persistent disk/volume and set `DATABASE_PATH` to an absolute file path on that volume (for example `/var/lib/aiglorythm/aiglorythm.db`).
+3. Set the remaining environment variables; use an HTTPS domain for `NEXT_PUBLIC_SITE_URL`.
 4. Build command: `npm ci && npm run build`
 5. Start command: `npm run start -- --hostname 0.0.0.0`
 6. Configure Resend (optional but recommended) with a verified sender domain.
-7. Back up `data/aiglorythm.db` and `public/uploads/` on a scheduled basis.
+7. Back up the database file and `public/uploads/` on a scheduled basis.
 
-For an organization that requires horizontally scaled/serverless infrastructure, use a managed PostgreSQL adapter (for example Supabase Postgres/Neon) plus object storage. The current schema is normalized and portable; do not run the SQLite database on an ephemeral Vercel filesystem. For the supplied functional version, persistent Node hosting is the appropriate production target.
+### Migrating existing local records to Turso
+
+The migration script reads the local database (including records still in the WAL) and copies the schema and rows into the configured target. It is idempotent and inserts only missing rows by default, so it cannot overwrite newer production data on a second run.
+
+```bash
+# Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN to .env.local first.
+npm run db:migrate:turso
+
+# Force-overwrite existing target rows if you intentionally want the local copy to win.
+node scripts/migrate-to-turso.mjs --replace
+```
+
+Use `TARGET_DATABASE_URL=file:./.tmp/test.db` to rehearse the migration against a local target without touching production.
+
+### Media uploads
+
+The Media Library writes to `public/uploads` on a local or self-hosted Node volume. On Vercel that directory is read-only, so configure object storage (for example Vercel Blob or S3) before using admin uploads in production. Text content, users, registrations, and admin records are unaffected because they are stored in Turso.
 
 ## Integrations that require credentials
 
 - **Resend**: set `RESEND_API_KEY` and `EMAIL_FROM` to deliver account verification, password reset, and admin notification email.
 - **Analytics**: paste an analytics identifier in Admin → Global settings. A provider-specific client snippet is intentionally not injected until the organization selects a provider and consent approach.
-- **Managed database/storage (optional scale-out)**: Supabase, Neon, S3, or equivalent credentials are not fabricated; configure them for serverless/high-availability architecture.
+- **Managed database**: Turso/libSQL credentials are required for Vercel production. Configure `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`.
 
 ## Quality checks run
 

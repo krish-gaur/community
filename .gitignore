@@ -1,5 +1,7 @@
 node_modules
 .next
+.tmp
+*.tsbuildinfo
 data/*.db
 .env*
 public/uploads/*
@@ -7,3 +9,5 @@ public/uploads/*
 
 # SQLite runtime files
 data/*.db*
+app/data/*.db
+app/data/*.db-*
