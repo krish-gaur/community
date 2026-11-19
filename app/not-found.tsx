@@ -1,0 +1,2 @@
+import Link from 'next/link';
+export default function NotFound(){return <main style={{minHeight:'100vh',display:'grid',placeItems:'center',padding:24}}><div className="form-card" style={{maxWidth:520,textAlign:'center'}}><div className="eyebrow">404</div><h1 className="title-lg">That page is not here.</h1><p className="muted">The link may have moved, expired, or never been published.</p><Link href="/" className="btn btn-primary">Return home</Link></div></main>}

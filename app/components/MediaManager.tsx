@@ -1,0 +1,14 @@
+'use client';
+import {useState} from 'react';
+import {Copy,Trash2,Upload} from 'lucide-react';
+export default function MediaManager({items:initial}:{items:any[]}){
+ const [items,setItems]=useState(initial); const [msg,setMsg]=useState(''); const [busy,setBusy]=useState(false);
+ async function upload(e:React.FormEvent<HTMLFormElement>){e.preventDefault();setBusy(true);const r=await fetch('/api/upload',{method:'POST',body:new FormData(e.currentTarget)});const d=await r.json();setBusy(false);setMsg(d.message||d.error);if(r.ok)setTimeout(()=>location.reload(),400)}
+ async function remove(id:number){if(!confirm('Remove this media record? The stored file will remain inaccessible but this reference is removed.'))return;const r=await fetch('/api/admin/media',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'delete',id})});const d=await r.json();setMsg(d.message||d.error);if(r.ok)setItems(items.filter(x=>x.id!==id))}
+ return <div className="dash-content">
+  <h1 className="dash-title">Media library</h1><p className="muted">Upload reusable images, video, and PDFs. Copy an asset URL into any content, event, team, or partner record.</p>
+  <form className="form-card" onSubmit={upload} style={{marginTop:22}}><div className="form-grid"><div className="field"><label>File</label><input type="file" name="file" required accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,video/mp4"/></div><div className="field"><label>Alt text (recommended)</label><input name="alt_text"/></div></div>{msg&&<div className={msg.includes('Uploaded')?'form-success':'form-error'}>{msg}</div>}<button className="btn btn-primary" disabled={busy}><Upload size={15}/>{busy?'Uploading…':'Upload asset'}</button><p className="form-note">JPEG, PNG, WebP, GIF, PDF and MP4 up to 10 MB are accepted.</p></form>
+  <div className="grid grid-4" style={{marginTop:24}}>{items.map(x=><article className="card" style={{padding:12}} key={x.id}>{x.mime_type.startsWith('image/') ? <img src={x.url} alt={x.alt_text||x.name} style={{width:'100%',height:110,objectFit:'cover',borderRadius:7,background:'var(--surface2)'}}/> : <div className="partner-logo" style={{height:110}}>{x.mime_type||'Asset'}</div>}<b style={{fontSize:12,display:'block',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:9}}>{x.name}</b><div className="muted" style={{fontSize:11}}>{Math.round(x.size/1024)} KB</div><div style={{display:'flex',gap:6,marginTop:10}}><button type="button" className="btn btn-secondary btn-small" onClick={()=>navigator.clipboard.writeText(x.url).then(()=>setMsg('Asset URL copied.'))}><Copy size={13}/>Copy URL</button><button type="button" className="theme" onClick={()=>remove(x.id)}><Trash2 size={14}/></button></div></article>)}</div>
+  {!items.length&&<div className="muted-box" style={{marginTop:22}}>No uploaded media yet.</div>}
+ </div>
+}

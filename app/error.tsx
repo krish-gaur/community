@@ -1,0 +1,2 @@
+'use client';import {useEffect} from 'react';
+export default function Error({reset}:{error:Error;reset:()=>void}){useEffect(()=>{},[]);return <main style={{minHeight:'100vh',display:'grid',placeItems:'center',padding:24}}><div className="form-card" style={{maxWidth:520,textAlign:'center'}}><div className="eyebrow">Something went wrong</div><h1 className="title-lg">Please try again.</h1><p className="muted">We could not load this part of the platform. Your data has not been changed.</p><button className="btn btn-primary" onClick={reset}>Try again</button></div></main>}

@@ -1,0 +1,1 @@
+import AuthForm from '@/app/components/AuthForm';export const metadata={title:'Reset password'};export default function Forgot(){return <main className="auth-panel" style={{minHeight:'100vh'}}><AuthForm mode="forgot"/></main>}

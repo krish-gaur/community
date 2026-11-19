@@ -1,0 +1,3 @@
+import Link from 'next/link';
+import { db } from '@/app/lib/db';
+export default function AnnouncementBar(){const row=db().prepare(`SELECT * FROM announcements WHERE status='published' AND (publish_at IS NULL OR publish_at <= CURRENT_TIMESTAMP) AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP) ORDER BY publish_at DESC LIMIT 1`).get() as {title:string;link_url:string}|undefined; if(!row)return null; return <div className="announcement"><div className="container"><span className="pill">NEW</span>{row.link_url?<Link href={row.link_url}>{row.title} →</Link>:<span>{row.title}</span>}</div></div>}

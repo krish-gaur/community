@@ -1,0 +1,9 @@
+node_modules
+.next
+data/*.db
+.env*
+public/uploads/*
+!public/uploads/.gitkeep
+
+# SQLite runtime files
+data/*.db*
